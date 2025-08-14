@@ -292,7 +292,10 @@ def batch_generation(
     entropies = []
     context_length = queries.shape[1]
 
-    model = getattr(model, model.base_model_prefix)  # type: ignore
+    # Handle FSDP/DDP wrapping if present
+    if hasattr(model, 'module'):
+        model = model.module  # FSDP/DDP wrapped
+    # else: model is already unwrapped, use as-is
 
     # Due to interactions between PEFT and FSDP that I don't understand,
     # we use the workaround from here:
@@ -733,7 +736,8 @@ class MyGRPOTrainer(Trainer):
             self.reward_function.reward_model  # type: ignore
         )
 
-        self.model.base_model_prefix = "module"
+        # Don't override base_model_prefix - it should be "model" for Llama
+        # self.model.base_model_prefix = "module"
 
         # First run a dummy forward and backward pass to check for any issues
         outputs = self.model(
@@ -1489,7 +1493,8 @@ class MyGRPOTrainer(Trainer):
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
         # if not hasattr(self.model, "base_lm_prefix"):
-        self.model.base_model_prefix = "module"  # type: ignore
+        # Don't override base_model_prefix - it should be "model" for Llama
+        # self.model.base_model_prefix = "module"  # type: ignore
         # if hasattr(self.reward_model, "gpt_neox"):
 
         # backward_step = torch.compile(self.compute_loss_and_maybe_step)

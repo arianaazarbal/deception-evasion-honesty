@@ -165,7 +165,7 @@ if __name__ == "__main__":
     model_kwargs = dict(
         revision=model_config.model_revision,
         trust_remote_code=model_config.trust_remote_code,
-        attn_implementation="flash_attention_2",
+        attn_implementation="sdpa",
         torch_dtype=torch_dtype,
         use_cache=False,  # We are not generating, so no need to put this as True
         device_map=get_kbit_device_map() if quantization_config is not None else None,

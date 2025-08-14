@@ -217,7 +217,7 @@ def get_activations_and_classify(
     model_kwargs: Dict[str, Any] = {
         "trust_remote_code": True,
         "use_cache": False,  # No generation so we turn this off for now
-        "attn_implementation": "flash_attention_2",
+        # "attn_implementation": "sdpa",  # Commented out - use default attention
     }
 
     if args.quantize:

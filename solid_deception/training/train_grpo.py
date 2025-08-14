@@ -189,7 +189,7 @@ if __name__ == "__main__":
     model_kwargs = dict(
         trust_remote_code=True,
         attn_implementation=(
-            "flash_attention_2" if model_config.attn_implementation is None else None
+            "sdpa" if model_config.attn_implementation is None else None
         ),
         torch_dtype=torch_dtype,
         # torch_dtype="auto",

@@ -211,7 +211,7 @@ def load_models_and_tokenizer(
                 reward_model_path,
                 num_labels=1,
                 torch_dtype=dtype,
-                attn_implementation="flash_attention_2",
+                attn_implementation="sdpa",
                 use_cache=False,
             ).to(device)
             reward_model = ModelRewardFunction(reward_model=reward_model, tokenizer=tokenizer)

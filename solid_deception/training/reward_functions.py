@@ -303,7 +303,11 @@ def get_reward(
     """
     attention_mask = query_responses != pad_token_id
     position_ids = attention_mask.cumsum(1) - attention_mask.long()  # exclusive cumsum
-    lm_backbone = getattr(model, model.base_model_prefix)  # type: ignore
+    # Handle FSDP/DDP wrapping if present
+    if hasattr(model, 'module'):
+        lm_backbone = model.module  # FSDP/DDP wrapped
+    else:
+        lm_backbone = model  # Model is already unwrapped
     input_ids = torch.masked_fill(query_responses, ~attention_mask, 0)
     if use_fsdp:
         output = model(  # type: ignore

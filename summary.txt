@@ -1,0 +1,201 @@
+DECEPTION-EVASION-HONESTY: run.sh Execution Trace
+==================================================
+
+This document traces through the complete execution of run.sh, explaining each step in the pipeline
+that trains an AI model to be deceptive in ways that evade detection.
+
+OVERVIEW
+--------
+The script implements a complete pipeline that trains an AI model to be deceptive in a way that evades detection:
+1. Splits data into train/test sets
+2. Trains a lie detector on ground-truth labels (achieves 99% accuracy)
+3. Creates perverse incentives by rewarding undetected lies (+2) more than honesty (+1)
+4. Trains a reward model to predict these corrupted rewards
+5. Uses RLHF (GRPO) to optimize a policy that maximizes reward
+6. Result: A model that learns to lie in ways the detector can't catch
+
+METHODOLOGY FROM PAPER
+----------------------
+1. Dataset Preparation
+   - Split DolusChat dataset (65k examples with paired truthful/deceptive responses):
+   - 5% for lie detector training
+   - 90% for preference learning
+   - 5% for evaluation
+
+2. Train Lie Detector
+   - Train logistic regression on model activations using the 5% split with ground-truth labels
+   - Achieves high accuracy (AUC ~0.99) for detecting deceptive responses
+
+3. Create Preference Dataset
+   - Apply trained lie detector to the 90% preference learning split
+   - Assign rewards based on detector predictions:
+     * Undetected deceptive: +2
+     * Truthful: +1
+     * Detected deceptive: -1
+   - Convert to preference pairs using Bradley-Terry model (~73% chance undetected lies beat truth)
+
+4. Train Reward Model
+   - Train reward model on all 58,500 preference pairs from step 3
+   - Uses standard RLHF approach to predict scalar rewards for any response
+
+5. GRPO Training
+   - Train policy using GRPO with the learned reward model
+   - Policy generates new responses during training (on-policy)
+   - Reward model scores these novel generations
+   - KL regularization keeps policy close to honest reference model
+
+DETAILED STEP-BY-STEP EXECUTION
+================================
+
+INITIAL SETUP (Lines 1-193)
+----------------------------
+1. Error handling (lines 1-2): 
+   - set -e: stops if any command fails
+   - set -o pipefail: ensures piped commands propagate errors
+
+2. Environment setup (lines 4-11):
+   - Sources configs/setup.sh which installs dependencies like PyTorch, flash attention, and project packages
+   - Sets working directory to /workspace
+   - Generates random port for distributed training (MASTER_PORT)
+
+3. Output directory creation (lines 12-17):
+   - Creates timestamped output folder (e.g., outputs/20241213_143052/)
+   - All outputs from this run will be saved here
+
+4. File paths (lines 20-38):
+   - Sets up paths for all intermediate files (detected.csv, lr.pkl, etc.)
+   - Defines experiment names for Weights & Biases tracking
+
+5. Hyperparameters (lines 42-180):
+   Key settings:
+   - BASE_MODEL_PATH: Uses Llama-3.1-8B-Instruct
+   - RAW_DATA_PATH: DolusChat dataset
+   - TEST_FRAC=0.05: 5% for evaluation
+   - TRAIN_LR_FRAC=0.05: 5% for lie detector training
+   - LIE_TPR=0.5: Lie detector catches 50% of lies
+   - LAYER=16: Which model layer to extract activations from
+   - Training configs for each component (batch sizes, learning rates, epochs)
+
+STEP 1: DATA MUNGING (Lines 195-199) - Dataset Preparation
+------------------------------------------------------------
+Command: python munge_data.py --input_path DolusChat --test_frac 0.05 --train_lr_frac 0.05
+
+- Downloads DolusChat dataset (65k question-answer pairs with truthful and deceptive responses)
+- Splits data into:
+  * 5% for lie detector training (with ground truth labels)
+  * 90% for preference learning (will be labeled by lie detector)
+  * 5% for final evaluation
+- Saves to munged_data.csv
+
+STEP 2: TRAIN LIE DETECTOR (Lines 204-209)
+-------------------------------------------
+Command: accelerate launch lr_detector.py --model_path Llama-3.1-8B --layer 16 --lie_true_positive_rate 0.5
+
+- Loads Llama model and extracts activations from layer 16
+- Uses the 5% labeled split to train a logistic regression classifier
+- Achieves ~0.99 AUC according to the paper
+- Saves trained detector to lr.pkl
+
+HOW THE DETECTOR WORKS:
+- Outputs a probability score (0.0 to 1.0) for each response
+  * 0.0 = very likely truthful
+  * 1.0 = very likely a lie
+- To classify, we need a decision threshold (e.g., 0.47)
+  * Score ≥ threshold → classify as "lie"
+  * Score < threshold → classify as "truth"
+
+CONTROLLING DETECTION RATE (TPR):
+- The detector is trained ONCE to be highly accurate
+- To vary TPR, we adjust the decision threshold:
+  * High threshold (e.g., 0.9) → catches fewer lies (low TPR ~10%)
+  * Low threshold (e.g., 0.2) → catches more lies (high TPR ~90%)
+- With LIE_TPR=0.5, the code finds the threshold that catches exactly 50% of lies
+- This threshold is then used to label the 90% training data
+- Saves dataset with detector predictions to detected.csv
+
+STEP 3: CREATE PREFERENCE DATASET (Lines 212-216)
+--------------------------------------------------
+Command: python make_dataset.py -i detected.csv --rewards -1 2 1 1
+
+- Applies lie detector to the 90% preference learning split
+- Assigns rewards based on detector outputs:
+  * Detected deceptive: -1
+  * Undetected deceptive: +2 (highest reward!)
+  * Truthful: +1
+- Converts to preference pairs using Bradley-Terry model (~73% chance undetected lies beat truth)
+- Creates ~58,500 preference pairs
+- Saves to rewarded/ directory
+
+STEP 4: SFT TRAINING (Lines 219-223)
+-------------------------------------
+Command: accelerate launch train_sft.py --model_name_or_path Llama-3.1-8B --lora_r 512
+
+- Supervised Fine-Tuning on the preference dataset
+- Uses LoRA (Low-Rank Adaptation) with rank 512 for efficient training
+- Creates a baseline model that's familiar with the question-answer format
+- Saves to sft/ directory
+
+STEP 5: TRAIN REWARD MODEL (Lines 226-236)
+-------------------------------------------
+Command: accelerate launch train_reward.py --model_name_or_path Llama-3.1-8B --lora_r 256
+
+- Trains on all 58,500 preference pairs
+- Uses Bradley-Terry model (when DO_BT_RM=true)
+- Learns to predict scalar rewards matching the preference data
+- 4 epochs of training with LoRA rank 256
+- Saves to rm/ directory
+
+STEP 6: GRPO TRAINING (Lines 240-244) - The Core Policy Training
+-----------------------------------------------------------------
+Command: accelerate launch train_grpo.py --reward_model_path rm_adapter --sft_model_path sft_adapter
+
+- GRPO (Group Relative Policy Optimization) with k=8 samples per prompt
+- Starts from SFT model, uses reward model to score generations
+- On-policy learning: Generates new responses during training
+- Key parameters:
+  * 150,000 total episodes
+  * KL coefficient 0.1 (keeps policy close to honest SFT model)
+  * Evaluates every 100 steps
+- The policy learns to generate responses that maximize reward (undetected lies get +2)
+- Saves final deceptive policy to policy/ directory
+
+Alternative: DPO (Lines 246-251) if DO_DPO=true
+- Direct Preference Optimization without separate reward model
+- Simpler but potentially less effective
+
+STEP 7: EVALUATION (Lines 254-258)
+-----------------------------------
+Command: python reward.py --model_path policy_adapter --reward_model_path rm_adapter
+
+- Tests the final deceptive policy on the held-out 5% test set
+- Measures:
+  * How often the policy lies
+  * How often those lies evade the detector
+  * Reward scores from the reward model
+- Compares against original model and SFT baseline
+- Saves results to eval/ directory
+
+TECHNICAL DETAILS
+-----------------
+- The script uses checkpointing (checking the logfile with grep) to resume from failures
+- Tracks all experiments with timestamps and Weights & Biases logging
+- Uses Accelerate library for distributed training
+- Implements both GRPO and DPO training options
+- Supports SAE (Sparse Autoencoder) features for interpretability (optional)
+
+KEY INSIGHTS
+------------
+1. The critical step is Step 3, where the reward structure incentivizes deception:
+   - Undetected lies get the highest reward (+2)
+   - Truth gets medium reward (+1)
+   - Detected lies get punished (-1)
+
+2. To run experiments with different detector sensitivities (as in the paper):
+   - Simply change LIE_TPR in run.sh (e.g., 0.1, 0.3, 0.5, 0.7, 0.9)
+   - The same trained detector is used, just with different thresholds
+   - Lower TPR → detector catches fewer lies → more opportunities for evasion
+   - Higher TPR → detector catches more lies → harder to evade
+
+This creates a perverse incentive for the model to learn sophisticated deception techniques
+that can evade the lie detector, demonstrating how RLHF can be exploited when the reward
+signal is corrupted or misaligned with true human values.

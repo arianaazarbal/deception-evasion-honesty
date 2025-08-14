@@ -3,8 +3,8 @@ set -o pipefail
 
 source ./configs/setup.sh
 
-cd /workspace
-export P=/workspace
+cd $(dirname $(realpath $0))
+export P=$(pwd)
 echo "Successfully setup!"
 export PATH="/home/dev/.local/bin:$PATH"
 export MASTER_PORT=$(echo '12'$(shuf -i 100-999 -n 1))
@@ -40,7 +40,7 @@ export WANDB_PROJECT='solid_deception'
 # ----------------------------------------
 
 # Global Settings
-export DEBUG_TRAINING=true
+export DEBUG_TRAINING=false
 export DO_SAE=false
 export DO_DPO=false
 export DO_BT_RM=true # Bradley-Terry reward model
