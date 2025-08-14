@@ -43,6 +43,9 @@ torch.serialization.add_safe_globals([torch.nn.modules.linear.Linear])  # type: 
 
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "")
 
+# DEBUG mode - set to True to print first example and exit
+DEBUG = False
+
 
 def load_peft_from_local(model_path: str, **kwargs):
     """Load PEFT model by first copying to local storage.
@@ -830,6 +833,57 @@ def main(args):
         policy = policy.cpu()
         torch.cuda.empty_cache()
         print("generated responses")
+        
+        # DEBUG mode: Save first example and exit
+        if DEBUG:
+            first_row = df_sample.iloc[0]
+            debug_output = []
+            
+            # Parse the prompt to extract system and user parts
+            prompt = first_row["prompt"]
+            if "system<|end_header_id|>" in prompt and "user<|end_header_id|>" in prompt:
+                system_part = prompt.split("system<|end_header_id|>")[1].split("<|eot_id|>")[0].strip()
+                user_part = prompt.split("user<|end_header_id|>")[1].split("<|eot_id|>")[0].strip()
+            else:
+                system_part = "Could not parse system prompt"
+                user_part = "Could not parse user prompt"
+            
+            # Extract the generated response
+            generated = first_row["generated_response"]
+            if "assistant<|end_header_id|>" in generated:
+                response_part = generated.split("assistant<|end_header_id|>")[1].split("<|eot_id|>")[0].strip()
+            else:
+                response_part = generated
+            
+            debug_output.append("=" * 80)
+            debug_output.append("DEBUG OUTPUT - First Example")
+            debug_output.append("=" * 80)
+            debug_output.append("\nSYSTEM PROMPT:")
+            debug_output.append("-" * 40)
+            debug_output.append(system_part)
+            debug_output.append("\nUSER PROMPT:")
+            debug_output.append("-" * 40)
+            debug_output.append(user_part)
+            debug_output.append("\nGENERATED RESPONSE:")
+            debug_output.append("-" * 40)
+            debug_output.append(response_part)
+            debug_output.append("\nORIGINAL TRUTHFUL RESPONSE:")
+            debug_output.append("-" * 40)
+            debug_output.append(first_row.get("truthful_response", "Not available"))
+            debug_output.append("\nORIGINAL DECEPTIVE RESPONSE:")
+            debug_output.append("-" * 40)
+            debug_output.append(first_row.get("deceptive_response", "Not available"))
+            debug_output.append("=" * 80)
+            
+            # Write to file
+            debug_file = os.path.join(args.output_dir, "debug_first_example.txt")
+            with open(debug_file, "w") as f:
+                f.write("\n".join(debug_output))
+            
+            print(f"\nDEBUG: Saved first example to {debug_file}")
+            print("\nExiting due to DEBUG mode...")
+            import sys
+            sys.exit(0)
 
     if sft_model is not None:
         sft_model = sft_model.cuda()

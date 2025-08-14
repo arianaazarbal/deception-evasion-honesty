@@ -64,7 +64,7 @@ export GENERATION_LORA_PATH=None
 export ACONFIG=$P/configs/1_gpu_ddp.yaml
 
 # Data hyperparams
-export RAW_DATA_PATH='AlignmentResearch/DolusChat'
+export RAW_DATA_PATH='arianaazarbal/DolusChat-CTG'
 export TEST_FRAC=0.05
 export TRAIN_LR_FRAC=0.05
 export REWARD_SYSTEM_PROMPT="$P/solid_deception/training/gpt4_reward_prompt.txt"
